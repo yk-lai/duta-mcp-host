@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
 from typing import Any
 from unittest.mock import patch
 
@@ -11,6 +12,34 @@ from httpx import Response
 from conftest import TEST_ADMIN_API_KEY
 
 ORG_URL = "https://geneco.crm.dynamics.com"
+KV_URL = "https://geneco-kv.vault.azure.net"
+
+
+def _mock_vault() -> None:
+    """Stub the vault hop that now sits in front of every D365 call."""
+    respx.get(f"{KV_URL}/secrets/Crm-Client-Id").mock(
+        return_value=Response(200, json={"value": "crm-client-id"})
+    )
+    respx.get(f"{KV_URL}/secrets/Crm-Client-Secret").mock(
+        return_value=Response(200, json={"value": "crm-client-secret"})
+    )
+
+
+@contextmanager
+def _stub_tokens():
+    """Both MSAL handshakes (vault + Dataverse) are msal's machinery, not
+    this project's wire shape — stub them rather than mocking over HTTP."""
+    with (
+        patch(
+            "geneco_mcp.clients.keyvault_client.KeyVaultClient._acquire_token",
+            return_value="fake-kv-token",
+        ),
+        patch(
+            "geneco_mcp.clients.d365_connector.D365Connector._acquire_token",
+            return_value="fake-token",
+        ),
+    ):
+        yield
 
 
 def _rpc(
@@ -35,8 +64,9 @@ def _seed_credentials(client: TestClient, tenant_slug: str) -> None:
         json={
             "org_url": ORG_URL,
             "tenant_id": "t1",
-            "client_id": "c1",
-            "client_secret": "s1",
+            "kv_vault_url": KV_URL,
+            "kv_client_id": "kv1",
+            "kv_client_secret": "kvs1",
         },
     )
     assert resp.status_code == 200
@@ -96,15 +126,14 @@ def test_tools_call_verify_account_no_credentials_is_honest_error(client: TestCl
 @respx.mock
 def test_tools_call_verify_account_happy_path(client: TestClient) -> None:
     _seed_credentials(client, "geneco")
+    _mock_vault()
     respx.get(f"{ORG_URL}/api/data/v9.2/accounts").mock(
         return_value=Response(
             200,
             json={"value": [{"accountid": "guid-1", "name": "Jane", "oem_accountbalance": 10.0}]},
         )
     )
-    with patch(
-        "geneco_mcp.clients.d365_connector.D365Connector._acquire_token", return_value="fake-token"
-    ):
+    with _stub_tokens():
         resp = _rpc(
             client,
             "geneco",
@@ -122,15 +151,57 @@ def test_tools_call_d365_failure_is_honest_error_not_5xx(client: TestClient) -> 
     connectivity failure must come back as a 200 + honest error, never an
     unhandled 500."""
     _seed_credentials(client, "geneco")
+    _mock_vault()
     respx.get(f"{ORG_URL}/api/data/v9.2/accounts").mock(side_effect=httpx.ConnectError("boom"))
-    with patch(
-        "geneco_mcp.clients.d365_connector.D365Connector._acquire_token", return_value="fake-token"
-    ):
+    with _stub_tokens():
         resp = _rpc(
             client,
             "geneco",
             "tools/call",
             {"name": "verify_account", "arguments": {"account_id": "ACC1", "mobile_number": "0123456789"}},
+        )
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    assert result["isError"] is True
+    assert "error" in result["structuredContent"]
+
+
+@respx.mock
+def test_tools_call_vault_failure_is_honest_error_not_5xx(client: TestClient) -> None:
+    """A tenant IS configured but its Key Vault can't be read — the D365
+    credentials can't be resolved at all. Must still be a 200 + relayable
+    error, never an unhandled 500 leaking out of the resolver."""
+    _seed_credentials(client, "geneco")
+    respx.get(f"{KV_URL}/secrets/Crm-Client-Id").mock(side_effect=httpx.ConnectError("boom"))
+    with _stub_tokens():
+        resp = _rpc(
+            client,
+            "geneco",
+            "tools/call",
+            {"name": "verify_account", "arguments": {"account_id": "ACC1", "mobile_number": "0123456789"}},
+        )
+    assert resp.status_code == 200
+    result = resp.json()["result"]
+    assert result["isError"] is True
+    assert "error" in result["structuredContent"]
+
+
+@respx.mock
+def test_tools_call_vault_failure_on_case_tools_is_honest_error_not_5xx(
+    client: TestClient,
+) -> None:
+    """Same guarantee via the shared re-verify path in ``_common.py``."""
+    _seed_credentials(client, "geneco")
+    respx.get(f"{KV_URL}/secrets/Crm-Client-Id").mock(return_value=Response(403, text="Forbidden"))
+    with _stub_tokens():
+        resp = _rpc(
+            client,
+            "geneco",
+            "tools/call",
+            {
+                "name": "get_support_cases",
+                "arguments": {"account_id": "ACC1", "mobile_number": "0123456789"},
+            },
         )
     assert resp.status_code == 200
     result = resp.json()["result"]

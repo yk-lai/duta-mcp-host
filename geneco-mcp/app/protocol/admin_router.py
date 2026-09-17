@@ -33,10 +33,21 @@ router = APIRouter()
 
 
 class D365CredentialsIn(BaseModel):
+    """Key Vault credentials, not D365 ones — the D365 app registration is
+    read from the vault at call time (``Crm-Client-Id``/``Crm-Client-Secret``)
+    and never stored here."""
+
     org_url: HttpUrl = Field(description="D365 org URL, e.g. https://yourorg.crm.dynamics.com")
-    tenant_id: str = Field(description="Entra (Azure AD) tenant GUID.")
-    client_id: str = Field(description="Entra app registration's client/application ID.")
-    client_secret: str = Field(description="Entra app registration's client secret.")
+    tenant_id: str = Field(
+        description="Entra (Azure AD) tenant GUID — used for both the Key Vault and D365 tokens."
+    )
+    kv_vault_url: HttpUrl = Field(
+        description="Key Vault URL, e.g. https://your-vault.vault.azure.net"
+    )
+    kv_client_id: str = Field(
+        description="Client/application ID of the Entra app registration that can read the vault."
+    )
+    kv_client_secret: str = Field(description="That app registration's client secret.")
     field_map: dict[str, str] = Field(default_factory=dict)
 
 
@@ -62,12 +73,15 @@ async def upsert_credentials(
             D365CredentialsInput(
                 org_url=str(body.org_url),
                 tenant_id=body.tenant_id,
-                client_id=body.client_id,
-                client_secret=body.client_secret,
+                kv_vault_url=str(body.kv_vault_url),
+                kv_client_id=body.kv_client_id,
+                kv_client_secret=body.kv_client_secret,
                 field_map=body.field_map,
             ),
         )
         redacted = await store.get_redacted(tenant_slug)
+    # Rotated vault credentials must take effect now, not at TTL expiry.
+    request.app.state.crm_cache.invalidate(tenant_slug)
     assert redacted is not None
     return redacted
 
@@ -99,6 +113,7 @@ async def delete_credentials(
     async with request.app.state.session_factory() as session:
         store = CredentialStore(session, encryption_key=settings.credential_encryption_key)
         deleted = await store.delete(tenant_slug)
+    request.app.state.crm_cache.invalidate(tenant_slug)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no credentials registered")
 

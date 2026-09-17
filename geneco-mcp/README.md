@@ -16,12 +16,21 @@ This service owns its own connectors and credential storage — D365/Dataverse
 (`app/clients/d365_connector.py`) and the custom fee-waiver API
 (`app/clients/custom_api_client.py`), each with its own table under
 `app/store/` — no dependency on duta-ilmu's integration-hub. Each tenant's
-credentials (Entra/Dataverse for D365, Basic Auth for the custom API) are
-registered once per connector kind (stage 1, below) and encrypted at rest
-(`app/security/crypto.py`); every `tools/call` (stage 2) resolves the
-tenant's stored credentials for whichever connector that tool needs and
-talks to the backend directly — MSAL client-credentials OAuth2 for D365,
-Basic Auth for the custom API.
+credentials are registered once per connector kind (stage 1, below) and
+encrypted at rest (`app/security/crypto.py`); every `tools/call` (stage 2)
+resolves the tenant's stored credentials for whichever connector that tool
+needs and talks to the backend directly.
+
+For D365 the stored credential is the tenant's **Key Vault** app
+registration, not its D365 one: the real D365 app registration
+(`Crm-Client-Id`/`Crm-Client-Secret`) is fetched from that vault on the
+tenant's first call and cached in memory for 15 minutes
+(`app/store/crm_resolver.py`), so the D365 secret is never at rest here.
+The fetch is lazy rather than at startup — a tenant registered after boot
+works without a restart, a vault outage degrades only the tenant being
+called, and a rotated secret is picked up within the TTL (immediately, if
+the credentials are re-registered). The custom API stores Basic Auth
+credentials directly, since it has no vault.
 
 ## Two-stage flow
 
@@ -30,7 +39,7 @@ one pair of endpoints per connector kind:
 
 ```
 POST   /{tenant_slug}/credentials   # register/replace a tenant's D365 credentials
-GET    /{tenant_slug}/credentials   # confirm what's registered (client_secret always masked)
+GET    /{tenant_slug}/credentials   # confirm what's registered (kv_client_secret always masked)
 DELETE /{tenant_slug}/credentials   # revoke
 
 POST   /{tenant_slug}/custom-api-credentials   # register/replace the custom API's Basic Auth creds
@@ -45,8 +54,9 @@ curl -s -X POST localhost:8000/geneco/credentials \
   -d '{
     "org_url": "https://geneco.crm.dynamics.com",
     "tenant_id": "<entra-tenant-guid>",
-    "client_id": "<entra-app-client-id>",
-    "client_secret": "<entra-app-client-secret>"
+    "kv_vault_url": "https://<your-vault>.vault.azure.net",
+    "kv_client_id": "<vault-reader-app-client-id>",
+    "kv_client_secret": "<vault-reader-app-client-secret>"
   }'
 
 curl -s -X POST localhost:8000/geneco/custom-api-credentials \
@@ -94,7 +104,7 @@ All env vars are prefixed `GENECO_MCP_` — see [.env.example](./.env.example).
 | Var | Default | Notes |
 |---|---|---|
 | `DATABASE_URL` | `postgresql+asyncpg://genecomcp:genecomcp-dev@localhost:55441/geneco_mcp` | Where tenant credentials are stored (D365 and custom API, one table each). |
-| `CREDENTIAL_ENCRYPTION_KEY` | *(empty)* | Fernet key encrypting each stored `client_secret` (D365) and `password` (custom API). Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. A bare env var is a stopgap — swap for a real KMS/Key Vault-issued key before production. |
+| `CREDENTIAL_ENCRYPTION_KEY` | *(empty)* | Fernet key encrypting each stored `kv_client_secret` (D365's vault credential) and `password` (custom API). Generate with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. A bare env var is a stopgap — swap for a real KMS/Key Vault-issued key before production. |
 | `ADMIN_API_KEY` | *(empty)* | Sent as `X-Admin-Api-Key` — required on `/{tenant_slug}/credentials` and `/{tenant_slug}/custom-api-credentials`. |
 | `LOG_LEVEL` | `INFO` | |
 | `LOG_FORMAT` | `json` | `json` or `human`. |

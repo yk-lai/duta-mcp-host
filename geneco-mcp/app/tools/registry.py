@@ -22,15 +22,19 @@ from typing import Any
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from geneco_mcp.store.crm_resolver import CrmCredentialCache
+
 
 @dataclass(frozen=True, slots=True)
 class ToolContext:
     """Per-call dependencies handed to every tool handler: the request's DB
-    session and the encryption key needed to decrypt whichever credential
-    kind the tool actually uses."""
+    session, the encryption key needed to decrypt whichever credential kind
+    the tool actually uses, and the process-local cache of vault-fetched
+    D365 credentials (empty and unused for tools that don't touch D365)."""
 
     session: AsyncSession
     encryption_key: str
+    crm_cache: CrmCredentialCache
 
 
 ToolHandler = Callable[[ToolContext, str, BaseModel], Awaitable[dict[str, Any]]]

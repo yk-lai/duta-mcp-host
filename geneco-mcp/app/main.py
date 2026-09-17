@@ -18,6 +18,7 @@ from geneco_mcp.config import Settings
 from geneco_mcp.db import build_engine, build_session_factory
 from geneco_mcp.protocol.admin_router import router as admin_router
 from geneco_mcp.protocol.router import router
+from geneco_mcp.store.crm_resolver import CrmCredentialCache
 
 
 def create_app(settings: Settings | None = None) -> FastAPI:
@@ -27,6 +28,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     engine = build_engine(cfg.database_url)
     application.state.engine = engine
     application.state.session_factory = build_session_factory(engine)
+    application.state.crm_cache = CrmCredentialCache()
     application.include_router(admin_router)
     application.include_router(router)
 

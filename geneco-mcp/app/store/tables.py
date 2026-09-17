@@ -26,14 +26,27 @@ def utcnow() -> datetime:
 
 
 class D365Credential(Base):
+    """A tenant's *Key Vault* credentials, not its D365 ones.
+
+    The D365 app registration (``Crm-Client-Id``/``Crm-Client-Secret``)
+    lives in the tenant's vault and is fetched at call time — see
+    ``clients/keyvault_client.py`` — so it is never at rest here. Only the
+    vault credential is stored, and only its secret is encrypted.
+    """
+
     __tablename__ = "d365_credentials"
 
     tenant_slug: Mapped[str] = mapped_column(String(64), primary_key=True)
     org_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    #: Entra tenant GUID — used as the authority for BOTH the Key Vault
+    #: token and the Dataverse token, on the assumption (inherited from
+    #: geneco-poc's ``crm_client.py``) that a tenant's vault and CRM app
+    #: registrations live in the same Entra tenant.
     tenant_id: Mapped[str] = mapped_column(String(64), nullable=False)
-    client_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    kv_vault_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    kv_client_id: Mapped[str] = mapped_column(String(64), nullable=False)
     #: Fernet ciphertext — see ``security/crypto.py``. Never stored plaintext.
-    client_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
+    kv_client_secret_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
     field_map: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     created_at: Mapped[datetime] = mapped_column(

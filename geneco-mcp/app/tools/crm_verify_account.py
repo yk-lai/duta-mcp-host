@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from geneco_mcp.clients.d365_connector import ConnectorError
 from geneco_mcp.store.credentials import CredentialStore
+from geneco_mcp.store.crm_resolver import CrmCredentialResolver
 from geneco_mcp.tools._common import NOT_CONFIGURED_ERROR, UNAVAILABLE_ERROR
 from geneco_mcp.tools.registry import ToolContext, register
 
@@ -36,7 +37,12 @@ class VerifyAccountInput(BaseModel):
 )
 async def handle(ctx: ToolContext, tenant_slug: str, args: VerifyAccountInput) -> dict[str, Any]:
     store = CredentialStore(ctx.session, encryption_key=ctx.encryption_key)
-    connector = await store.get_connector(tenant_slug)
+    resolver = CrmCredentialResolver(store, ctx.crm_cache)
+    try:
+        connector = await resolver.get_connector(tenant_slug)
+    except ConnectorError:
+        # The tenant is configured but its vault couldn't be read.
+        return {"error": UNAVAILABLE_ERROR}
     if connector is None:
         return {"error": NOT_CONFIGURED_ERROR}
     try:

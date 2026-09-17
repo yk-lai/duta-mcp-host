@@ -77,8 +77,9 @@ def test_d365_and_custom_api_credentials_are_independent(client: TestClient) -> 
     d365_body = {
         "org_url": "https://geneco.crm.dynamics.com",
         "tenant_id": "77dee05b-8ff2-4aee-81a7-461ed9ab3456",
-        "client_id": "77fa3ab9-8247-48e4-8ad5-5fc959ef7f24",
-        "client_secret": "d365-secret",
+        "kv_vault_url": "https://geneco-kv.vault.azure.net",
+        "kv_client_id": "77fa3ab9-8247-48e4-8ad5-5fc959ef7f24",
+        "kv_client_secret": "d365-secret",
     }
     client.post(
         "/geneco/credentials", headers={"X-Admin-Api-Key": TEST_ADMIN_API_KEY}, json=d365_body

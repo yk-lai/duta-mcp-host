@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import Any
 
 from geneco_mcp.clients.d365_connector import ConnectorError, D365Connector
-from geneco_mcp.store.credentials import CredentialStore
+from geneco_mcp.store.crm_resolver import CrmCredentialResolver
 
 NOT_CONFIGURED_ERROR = "Account verification is not available for this workspace right now."
 UNAVAILABLE_ERROR = "I can't check that right now — please contact support."
@@ -24,13 +24,17 @@ PASSWORD_RESET_NOT_CONFIGURED_ERROR = "Password reset is not available for this 
 
 
 async def verify_and_get_guid(
-    store: CredentialStore, tenant_slug: str, *, account_id: str, mobile_number: str
+    resolver: CrmCredentialResolver, tenant_slug: str, *, account_id: str, mobile_number: str
 ) -> tuple[D365Connector | None, str | None, dict[str, Any] | None]:
     """Shared re-verify step for ``create_support_case``/``get_support_cases``.
     Returns ``(connector, account_guid, error_response)`` — ``error_response``
     is set (and the other two ``None``) whenever the caller should return it
     as-is."""
-    connector = await store.get_connector(tenant_slug)
+    try:
+        connector = await resolver.get_connector(tenant_slug)
+    except ConnectorError:
+        # The tenant is configured but its vault couldn't be read.
+        return None, None, {"error": UNAVAILABLE_ERROR}
     if connector is None:
         return None, None, {"error": NOT_CONFIGURED_ERROR}
     try:

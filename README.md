@@ -41,7 +41,7 @@ duta-mcp-host/
     │   ├── config.py         # Settings (env-prefixed GENECO_MCP_)
     │   ├── clients/          # D365Connector (MSAL OAuth2) + CustomApiClient (Basic Auth)
     │   ├── store/            # Postgres-backed tenant credential store (encrypted at rest), one table per connector kind
-    │   ├── security/         # client_secret encryption (Fernet)
+    │   ├── security/         # stored-secret encryption (Fernet)
     │   ├── tools/            # Tool definitions + handlers (one file per tool, @register)
     │   └── protocol/         # MCP JSON-RPC (router.py) + credential intake (admin_router.py)
     ├── tests/
@@ -83,11 +83,12 @@ cd geneco-mcp && make migrate && cd ..
 # Run the gateway locally
 make run
 
-# Stage 1: register a tenant's D365 credentials (requires X-Admin-Api-Key)
+# Stage 1: register a tenant's Key Vault credentials, which the service uses
+# to fetch that tenant's D365 app registration at call time (X-Admin-Api-Key)
 curl -s -X POST localhost:8000/geneco-mcp/geneco/credentials \
   -H 'Content-Type: application/json' \
   -H 'X-Admin-Api-Key: dev-admin-key' \
-  -d '{"org_url":"https://geneco.crm.dynamics.com","tenant_id":"...","client_id":"...","client_secret":"..."}'
+  -d '{"org_url":"https://geneco.crm.dynamics.com","tenant_id":"...","kv_vault_url":"https://your-vault.vault.azure.net","kv_client_id":"...","kv_client_secret":"..."}'
 
 # Stage 2: drive the MCP handshake by hand
 curl -s -X POST localhost:8000/geneco-mcp/geneco \

@@ -1,19 +1,21 @@
-"""Tenant D365 credential store: the one place that resolves a
-``tenant_slug`` into a live, ready-to-call ``D365Connector`` — and the one
-place ``client_secret`` ever gets decrypted.
+"""Tenant Key Vault credential store: the one place that resolves a
+``tenant_slug`` into the decrypted vault credentials needed to fetch that
+tenant's real D365 app registration — and the one place
+``kv_client_secret`` ever gets decrypted.
 
-Mirrors integration-hub's ``_load_connector``/``store.py`` pattern, but for
-a single connector kind stored locally instead of proxied over HTTP.
+Pure persistence: it does not call Key Vault or build a connector. The
+vault hop and its cache live in ``store/crm_resolver.py``, which is what
+tool handlers actually use.
 """
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from geneco_mcp.clients.d365_connector import D365Connector
 from geneco_mcp.security.crypto import decrypt_secret, encrypt_secret
 from geneco_mcp.store.tables import D365Credential
 
@@ -26,22 +28,37 @@ class D365CredentialsInput:
     kept separate from the DB row so callers never need to import the ORM
     model just to construct one."""
 
-    __slots__ = ("org_url", "tenant_id", "client_id", "client_secret", "field_map")
+    __slots__ = ("org_url", "tenant_id", "kv_vault_url", "kv_client_id", "kv_client_secret",
+                 "field_map")
 
     def __init__(
         self,
         *,
         org_url: str,
         tenant_id: str,
-        client_id: str,
-        client_secret: str,
+        kv_vault_url: str,
+        kv_client_id: str,
+        kv_client_secret: str,
         field_map: dict[str, str] | None = None,
     ) -> None:
         self.org_url = org_url
         self.tenant_id = tenant_id
-        self.client_id = client_id
-        self.client_secret = client_secret
+        self.kv_vault_url = kv_vault_url
+        self.kv_client_id = kv_client_id
+        self.kv_client_secret = kv_client_secret
         self.field_map = field_map or {}
+
+
+@dataclass(frozen=True, slots=True)
+class ResolvedKvCredentials:
+    """Decrypted vault credentials plus the D365 config they unlock."""
+
+    org_url: str
+    tenant_id: str
+    vault_url: str
+    client_id: str
+    client_secret: str
+    field_map: dict[str, str]
 
 
 class CredentialStore:
@@ -51,14 +68,15 @@ class CredentialStore:
 
     async def upsert(self, tenant_slug: str, config: D365CredentialsInput) -> D365Credential:
         row = await self._session.get(D365Credential, tenant_slug)
-        encrypted_secret = encrypt_secret(config.client_secret, key=self._encryption_key)
+        encrypted_secret = encrypt_secret(config.kv_client_secret, key=self._encryption_key)
         if row is None:
             row = D365Credential(tenant_slug=tenant_slug)
             self._session.add(row)
         row.org_url = str(config.org_url)
         row.tenant_id = config.tenant_id
-        row.client_id = config.client_id
-        row.client_secret_encrypted = encrypted_secret
+        row.kv_vault_url = str(config.kv_vault_url)
+        row.kv_client_id = config.kv_client_id
+        row.kv_client_secret_encrypted = encrypted_secret
         row.field_map = config.field_map
         row.enabled = True
         await self._session.commit()
@@ -80,13 +98,14 @@ class CredentialStore:
             "tenant_slug": row.tenant_slug,
             "org_url": row.org_url,
             "tenant_id": row.tenant_id,
-            "client_id": row.client_id,
-            "client_secret": MASK,
+            "kv_vault_url": row.kv_vault_url,
+            "kv_client_id": row.kv_client_id,
+            "kv_client_secret": MASK,
             "field_map": row.field_map,
             "enabled": row.enabled,
         }
 
-    async def get_connector(self, tenant_slug: str) -> D365Connector | None:
+    async def get_kv_credentials(self, tenant_slug: str) -> ResolvedKvCredentials | None:
         row = await self._session.scalar(
             select(D365Credential).where(
                 D365Credential.tenant_slug == tenant_slug, D365Credential.enabled.is_(True)
@@ -94,11 +113,12 @@ class CredentialStore:
         )
         if row is None:
             return None
-        client_secret = decrypt_secret(row.client_secret_encrypted, key=self._encryption_key)
-        return D365Connector(
+        client_secret = decrypt_secret(row.kv_client_secret_encrypted, key=self._encryption_key)
+        return ResolvedKvCredentials(
             org_url=row.org_url,
             tenant_id=row.tenant_id,
-            client_id=row.client_id,
+            vault_url=row.kv_vault_url,
+            client_id=row.kv_client_id,
             client_secret=client_secret,
             field_map=row.field_map,
         )

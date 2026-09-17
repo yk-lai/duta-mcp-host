@@ -30,6 +30,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from geneco_mcp.config import Settings
 from geneco_mcp.protocol.models import JsonRpcId, rpc_error, rpc_result
+from geneco_mcp.store.crm_resolver import CrmCredentialCache
 from geneco_mcp.tools import all_tools, get_tool
 from geneco_mcp.tools.registry import ToolContext
 
@@ -59,6 +60,7 @@ async def _handle_tools_call(
     tenant_slug: str,
     settings: Settings,
     session_factory: async_sessionmaker,
+    crm_cache: CrmCredentialCache,
 ) -> dict[str, Any]:
     name = params.get("name")
     arguments = params.get("arguments") or {}
@@ -73,7 +75,11 @@ async def _handle_tools_call(
             "isError": True,
         }
     async with session_factory() as session:
-        ctx = ToolContext(session=session, encryption_key=settings.credential_encryption_key)
+        ctx = ToolContext(
+            session=session,
+            encryption_key=settings.credential_encryption_key,
+            crm_cache=crm_cache,
+        )
         result = await spec.handler(ctx, tenant_slug, parsed_args)
     return {
         "content": [{"type": "text", "text": json.dumps(result)}],
@@ -120,6 +126,7 @@ async def mcp_endpoint(tenant_slug: str, request: Request) -> Response:
             tenant_slug=tenant_slug,
             settings=settings,
             session_factory=request.app.state.session_factory,
+            crm_cache=request.app.state.crm_cache,
         )
         return JSONResponse(rpc_result(request_id, result))
 

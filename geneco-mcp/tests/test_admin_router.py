@@ -7,8 +7,9 @@ from conftest import TEST_ADMIN_API_KEY
 CREDENTIALS_BODY = {
     "org_url": "https://geneco.crm.dynamics.com",
     "tenant_id": "77dee05b-8ff2-4aee-81a7-461ed9ab3456",
-    "client_id": "77fa3ab9-8247-48e4-8ad5-5fc959ef7f24",
-    "client_secret": "super-secret-value",
+    "kv_vault_url": "https://geneco-kv.vault.azure.net",
+    "kv_client_id": "77fa3ab9-8247-48e4-8ad5-5fc959ef7f24",
+    "kv_client_secret": "super-secret-value",
 }
 
 
@@ -29,12 +30,12 @@ def test_upsert_then_get_never_exposes_the_real_secret(client: TestClient) -> No
         "/geneco/credentials", headers={"X-Admin-Api-Key": TEST_ADMIN_API_KEY}, json=CREDENTIALS_BODY
     )
     assert resp.status_code == 200
-    assert resp.json()["client_secret"] == "•••"
+    assert resp.json()["kv_client_secret"] == "•••"
     assert "super-secret-value" not in resp.text
 
     get_resp = client.get("/geneco/credentials", headers={"X-Admin-Api-Key": TEST_ADMIN_API_KEY})
     assert get_resp.status_code == 200
-    assert get_resp.json()["client_secret"] == "•••"
+    assert get_resp.json()["kv_client_secret"] == "•••"
     assert "super-secret-value" not in get_resp.text
 
 

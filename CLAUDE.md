@@ -20,8 +20,10 @@ duta-mcp-host/
         ├── tools/           # Tool definitions + handlers (LLM-facing contract, one file
         │                      each — crm_* prefix for D365 tools, api_* for custom API tools)
         ├── clients/         # D365Connector (MSAL OAuth2) + CustomApiClient (Basic Auth)
-        ├── store/           # Postgres-backed tenant credential store, one table per connector kind
-        └── security/        # Encryption for stored client_secret/password (crypto.py)
+        │                      + KeyVaultClient (reads each tenant's D365 creds at call time)
+        ├── store/           # Postgres-backed tenant credential store, one table per connector
+        │                      kind, + crm_resolver.py's in-memory TTL cache of vault-fetched creds
+        └── security/        # Encryption for stored kv_client_secret/password (crypto.py)
 ```
 
 `geneco-mcp` owns its own D365 connector, custom API client, and encrypted
@@ -108,12 +110,25 @@ proxying to a system that had this same gap).
 
 ### Credential security
 
-- `client_secret` is the only field encrypted at rest (`security/crypto.py`,
-  Fernet) — `org_url`/`tenant_id`/`client_id` are stored plain, matching
-  the same secret/non-secret split used elsewhere in this system.
+- **The D365 secret is never at rest here.** `d365_credentials` stores the
+  tenant's *Key Vault* app registration; the real D365 one
+  (`Crm-Client-Id`/`Crm-Client-Secret`, names hardcoded in
+  `clients/keyvault_client.py`) is fetched on first use and lives only in
+  the in-memory TTL cache in `store/crm_resolver.py`. Don't add a code path
+  that writes a fetched `Crm-Client-Secret` to the DB or a log — that would
+  undo the whole point of the indirection.
+- `kv_client_secret` is the only field encrypted at rest
+  (`security/crypto.py`, Fernet) — `org_url`/`tenant_id`/`kv_vault_url`/
+  `kv_client_id` are stored plain, matching the same secret/non-secret
+  split used elsewhere in this system.
 - Every read path (`GET`/`POST /{tenant_slug}/credentials`) returns a
-  masked placeholder for `client_secret`, never the real value — see
+  masked placeholder for `kv_client_secret`, never the real value — see
   `store/credentials.py`'s `MASK`.
+- A vault failure must surface as a relayable error, never a 500: the
+  resolver translates `KeyVaultError` into `ConnectorError` at its
+  boundary so tool handlers keep catching one error type. Note this makes
+  `get_connector()` raise as well as return `None` — keep both call sites
+  (`tools/_common.py`, `tools/crm_verify_account.py`) handling each case.
 - `tools/call` is intentionally unauthenticated (matches duta-ilmu's
   platform-wide MCP convention — the orchestrator's MCP client never sends
   auth headers). The credential-intake endpoints

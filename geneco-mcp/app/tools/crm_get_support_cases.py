@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 
 from geneco_mcp.clients.d365_connector import ConnectorError
 from geneco_mcp.store.credentials import CredentialStore
+from geneco_mcp.store.crm_resolver import CrmCredentialResolver
 from geneco_mcp.tools._common import UNAVAILABLE_ERROR, verify_and_get_guid
 from geneco_mcp.tools.registry import ToolContext, register
 
@@ -34,8 +35,9 @@ async def handle(
     ctx: ToolContext, tenant_slug: str, args: GetSupportCasesInput
 ) -> dict[str, Any]:
     store = CredentialStore(ctx.session, encryption_key=ctx.encryption_key)
+    resolver = CrmCredentialResolver(store, ctx.crm_cache)
     connector, account_guid, error = await verify_and_get_guid(
-        store, tenant_slug, account_id=args.account_id, mobile_number=args.mobile_number
+        resolver, tenant_slug, account_id=args.account_id, mobile_number=args.mobile_number
     )
     if error is not None:
         return error
