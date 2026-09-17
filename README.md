@@ -113,6 +113,13 @@ make run           # serves on :8000, routes at POST /{tenant_slug}
 make test
 ```
 
+Note the path difference: standalone, a tenant's endpoint is
+`/{tenant_slug}`; behind the gateway it's `/geneco-mcp/{tenant_slug}`.
+`geneco-mcp/README.md`'s examples use the standalone form — prepend
+`/geneco-mcp` when talking to a gateway deployment (which is what the
+Dockerfile runs). See that README for credential setup, the request and
+response shapes, and the error convention.
+
 ## Adding a New Tool to `geneco-mcp`
 
 1. Create `geneco-mcp/app/tools/<tool_name>.py` with a Pydantic input model

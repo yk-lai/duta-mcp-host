@@ -32,6 +32,26 @@ called, and a rotated secret is picked up within the TTL (immediately, if
 the credentials are re-registered). The custom API stores Basic Auth
 credentials directly, since it has no vault.
 
+## Base URL — read this first
+
+Every path below is relative to a base that depends on how the service is
+running, and getting this wrong is the most common way to waste an
+afternoon (you get a `404 {"detail":"Not Found"}`, not a helpful error):
+
+| Running as | Base URL |
+|---|---|
+| Standalone (`make run`, this README's quickstart) | `http://localhost:8000` |
+| Behind the gateway (`Dockerfile`/`docker-compose`, i.e. **every real deployment**) | `http://<host>/geneco-mcp` |
+
+The gateway mounts this app under `/geneco-mcp` (see `gateway.py`'s
+`SUB_APPS`), so a tenant's MCP endpoint in production is
+`https://<host>/geneco-mcp/{tenant_slug}`. Examples below use the
+standalone form; prepend `/geneco-mcp` if you're talking to the gateway.
+
+`{tenant_slug}` is a free-form identifier **you choose** when registering
+a tenant — it is not validated against anything and never leaves this
+service. Use the same value in stage 1 and stage 2.
+
 ## Two-stage flow
 
 **Stage 1 — one-time credential intake** (authenticated, `X-Admin-Api-Key`),
@@ -47,6 +67,23 @@ GET    /{tenant_slug}/custom-api-credentials   # confirm what's registered (pass
 DELETE /{tenant_slug}/custom-api-credentials   # revoke
 ```
 
+### Before you register a D365 tenant
+
+Registering succeeds even if these aren't done — and then *every* D365
+tool call fails at runtime. Set them up first:
+
+1. **Two secrets must already exist in that tenant's Key Vault**, named
+   exactly (names are hardcoded in `app/clients/keyvault_client.py`):
+   - `Crm-Client-Id` — the Dataverse app registration's client ID
+   - `Crm-Client-Secret` — its client secret
+2. **The app registration you pass as `kv_client_id` needs `Get` on
+   secrets** in that vault (RBAC role `Key Vault Secrets User`, or a
+   `Get` access policy). It does **not** need any Dataverse access — it
+   only reads the vault.
+3. **The Dataverse app registration** (the one whose ID is in
+   `Crm-Client-Id`) must be provisioned as an Application User in the
+   D365 org, or Dataverse returns 403 even with a valid token.
+
 ```bash
 curl -s -X POST localhost:8000/geneco/credentials \
   -H 'Content-Type: application/json' \
@@ -58,7 +95,20 @@ curl -s -X POST localhost:8000/geneco/credentials \
     "kv_client_id": "<vault-reader-app-client-id>",
     "kv_client_secret": "<vault-reader-app-client-secret>"
   }'
+```
 
+| Field | What it is |
+|---|---|
+| `org_url` | The Dataverse org, e.g. `https://yourorg.crm.dynamics.com` |
+| `tenant_id` | Entra tenant GUID — used as the authority for **both** the Key Vault token and the Dataverse token. This assumes the vault and CRM app registrations live in the same Entra tenant; if yours don't, this needs a second column |
+| `kv_vault_url` | The tenant's Key Vault, e.g. `https://your-vault.vault.azure.net` |
+| `kv_client_id` / `kv_client_secret` | The app registration that can **read that vault**. Not the D365 one — that gets fetched from the vault at call time and is never stored here |
+| `field_map` | Optional `{}`. Overrides the D365 incident column names used by `create_support_case` |
+
+The custom API has no vault — its Basic Auth credentials are stored
+directly:
+
+```bash
 curl -s -X POST localhost:8000/geneco/custom-api-credentials \
   -H 'Content-Type: application/json' \
   -H 'X-Admin-Api-Key: dev-admin-key' \
@@ -68,6 +118,27 @@ curl -s -X POST localhost:8000/geneco/custom-api-credentials \
     "password": "<basic-auth-password>"
   }'
 ```
+
+Both `POST`s return the stored record with the secret masked, and are
+idempotent — re-posting replaces the previous values (and drops the
+cached D365 credentials for that tenant, so a rotation takes effect
+immediately):
+
+```json
+{
+  "tenant_slug": "geneco",
+  "org_url": "https://geneco.crm.dynamics.com/",
+  "tenant_id": "...",
+  "kv_vault_url": "https://your-vault.vault.azure.net/",
+  "kv_client_id": "...",
+  "kv_client_secret": "•••",
+  "field_map": {},
+  "enabled": true
+}
+```
+
+`GET` returns the same shape (`404` if nothing is registered); `DELETE`
+returns `204`, or `404` if there was nothing to delete.
 
 **Stage 2 — the MCP protocol face**, matching exactly what duta-ilmu's
 orchestrator MCP client speaks
@@ -81,6 +152,52 @@ POST /{tenant_slug}
 `tenant_slug` is a URL path parameter, not hardcoded — any tenant with
 credentials registered via stage 1 can point its MCP config at
 `.../geneco-mcp/{their_slug}`.
+
+### Errors: check `isError`, not the HTTP status
+
+**A failed tool call still returns HTTP 200.** A client that branches on
+the status code will treat every failure as a success. Failures are
+carried inside the JSON-RPC result instead:
+
+```json
+{
+  "jsonrpc": "2.0", "id": 1,
+  "result": {
+    "content": [{"type": "text", "text": "{\"error\": \"...\"}"}],
+    "structuredContent": {"error": "I can't check that right now — please contact support."},
+    "isError": true
+  }
+}
+```
+
+This is deliberate. The `error` string is written to be relayed verbatim
+to a customer by the calling model, so an unconfigured tenant, an
+unreachable Key Vault, and a D365 outage all surface as a sentence a
+chatbot can say — never a 5xx, and never fabricated data. Branch on
+`result.isError`, and read `result.structuredContent`.
+
+There are three other response shapes on this endpoint, all verified:
+
+| Case | Response |
+|---|---|
+| Unknown JSON-RPC method | **HTTP 200**, but a top-level `error` object (`{"code": -32601, ...}`) instead of `result` — so check for `error` before reading `result` |
+| `notifications/initialized` | **HTTP 202**, empty body (it's a notification, not a request) |
+| Unknown path / bad tenant slug on an admin route | **HTTP 404** |
+
+Note the first two: a tool failure and a protocol failure are *different
+shapes*, and neither is a non-200.
+
+A successful call puts the tool's own result in `structuredContent`:
+
+```json
+{
+  "result": {
+    "content": [{"type": "text", "text": "{\"verified\": true, ...}"}],
+    "structuredContent": {"verified": true, "account_id": "...", "name": "...", "account_balance": 75.79},
+    "isError": false
+  }
+}
+```
 
 No transport-level authentication on this endpoint (the orchestrator's MCP
 client sends no auth headers to tenant MCP servers today — a
@@ -96,6 +213,43 @@ anything. The four custom-API tools (`check_fee_waiver_status`,
 are the exception — the custom API has no documented shape for that
 cross-check, so `account_number` (or `email`, for password reset) is a
 direct lookup key there, not something re-verified first.
+
+## Provisioning a tenant end to end
+
+Against a gateway deployment (drop `/geneco-mcp` if running standalone):
+
+```bash
+HOST=http://localhost:8123/geneco-mcp
+SLUG=acme                       # you choose this
+ADMIN_KEY=dev-admin-key         # GENECO_MCP_ADMIN_API_KEY
+
+# 1. D365, via the tenant's Key Vault (prerequisites above must be done first)
+curl -s -X POST "$HOST/$SLUG/credentials" \
+  -H "X-Admin-Api-Key: $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"org_url":"https://acme.crm.dynamics.com","tenant_id":"<entra-guid>",
+       "kv_vault_url":"https://acme-kv.vault.azure.net",
+       "kv_client_id":"<vault-reader-id>","kv_client_secret":"<vault-reader-secret>"}'
+
+# 2. The custom cxchat API
+curl -s -X POST "$HOST/$SLUG/custom-api-credentials" \
+  -H "X-Admin-Api-Key: $ADMIN_KEY" -H 'Content-Type: application/json' \
+  -d '{"base_url":"https://<cxchat-host>/webapi","username":"<user>","password":"<pass>"}'
+
+# 3. Confirm the tools are visible
+curl -s -X POST "$HOST/$SLUG" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+
+# 4. Prove the whole chain works (vault -> D365) with a real account
+curl -s -X POST "$HOST/$SLUG" -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"verify_account",
+       "arguments":{"account_id":"<acct>","mobile_number":"<mobile>"}}}'
+```
+
+Step 4 is the real test — steps 1–2 only prove the credentials were
+*stored*, not that they *work*. If step 4 returns `isError: true` with
+"not available for this workspace", nothing is registered for that slug;
+if it says "I can't check that right now", the credentials are registered
+but the vault or D365 rejected them.
 
 ## Configuration
 
