@@ -31,8 +31,8 @@ VAULT_SCOPE = "https://vault.azure.net/.default"
 #: Hardcoded deliberately — every tenant's vault uses these exact names
 #: (matching geneco-poc's ``crm_client.py``); make them per-tenant columns
 #: only if a tenant ever needs different ones.
-CRM_CLIENT_ID_SECRET = "Crm-Client-Id"
-CRM_CLIENT_SECRET_SECRET = "Crm-Client-Secret"
+GENECO_CRM_CLIENT_ID_SECRET = "Crm-Client-Id"
+GENECO_CRM_CLIENT_SECRET_SECRET = "Crm-Client-Secret"
 
 
 class KeyVaultError(Exception):
@@ -112,6 +112,6 @@ class KeyVaultClient:
 
     async def get_crm_credentials(self) -> tuple[str, str]:
         """The tenant's real D365 app registration, as ``(client_id, client_secret)``."""
-        client_id = await self.get_secret(CRM_CLIENT_ID_SECRET)
-        client_secret = await self.get_secret(CRM_CLIENT_SECRET_SECRET)
+        client_id = await self.get_secret(GENECO_CRM_CLIENT_ID_SECRET)
+        client_secret = await self.get_secret(GENECO_CRM_CLIENT_SECRET_SECRET)
         return client_id, client_secret
