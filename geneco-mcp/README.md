@@ -52,6 +52,22 @@ standalone form; prepend `/geneco-mcp` if you're talking to the gateway.
 a tenant — it is not validated against anything and never leaves this
 service. Use the same value in stage 1 and stage 2.
 
+## API reference
+
+The service serves its own interactive OpenAPI docs, which are always
+current with the code (schemas and field descriptions come straight from
+the Pydantic models):
+
+```
+<base>/api/docs        # Swagger UI, with try-it-out
+<base>/openapi.json    # machine-readable schema
+```
+
+e.g. `http://localhost:8123/geneco-mcp/api/docs` behind the gateway. Use
+that as the authoritative endpoint/field reference; the rest of this
+README covers the things a schema can't express — prerequisites, the
+error convention, and how the pieces fit together.
+
 ## Two-stage flow
 
 **Stage 1 — one-time credential intake** (authenticated, `X-Admin-Api-Key`),

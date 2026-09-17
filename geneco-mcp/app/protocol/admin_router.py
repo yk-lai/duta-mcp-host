@@ -48,7 +48,13 @@ class D365CredentialsIn(BaseModel):
         description="Client/application ID of the Entra app registration that can read the vault."
     )
     kv_client_secret: str = Field(description="That app registration's client secret.")
-    field_map: dict[str, str] = Field(default_factory=dict)
+    field_map: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Optional. Overrides the D365 incident columns create_support_case writes to, "
+            'as {"title": "<column>", "description": "<column>"}. Defaults to subject/description.'
+        ),
+    )
 
 
 def _require_admin_key(settings: Settings, x_admin_api_key: str | None) -> None:
