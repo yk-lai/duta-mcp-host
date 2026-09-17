@@ -39,5 +39,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
-# Vendor specs not checked in (auth spec kept local only)
-geneco-mcp/docs/SSP_Authentication_API_Specs_V3.pdf
+# Vendor/client docs kept local only
+geneco-mcp/docs/
