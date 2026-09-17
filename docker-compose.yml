@@ -1,0 +1,30 @@
+services:
+  gateway:
+    build: .
+    ports:
+      - "80:8000"
+    env_file:
+      - path: ./geneco-mcp/.env
+        required: false
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: genecomcp
+      POSTGRES_PASSWORD: genecomcp-dev
+      POSTGRES_DB: geneco_mcp
+    ports:
+      - "55441:5432"
+    volumes:
+      - geneco_mcp_db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U genecomcp -d geneco_mcp"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  geneco_mcp_db:
